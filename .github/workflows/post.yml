@@ -5,8 +5,8 @@ on:
     - cron: "50 8 * * *" # 매일 한국시간 17:50 (UTC 08:50)
   workflow_dispatch:
     inputs:
-      folder:
-        description: "게시할 폴더 (예: queue/test-1030)"
+      date:
+        description: "게시할 날짜 (예: 2026-10-31)"
         required: true
       dry_run:
         description: "true면 게시하지 않고 확인만"
@@ -21,42 +21,65 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: 게시
         env:
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
-          IMAGE_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/main
           EVENT: ${{ github.event_name }}
-          INPUT_FOLDER: ${{ github.event.inputs.folder }}
+          INPUT_DATE: ${{ github.event.inputs.date }}
           INPUT_DRY: ${{ github.event.inputs.dry_run }}
+          QUEUE_REPO: dbcjfrb333/minton-cardnews-queue
         run: |
+          set -e
           if [ "$EVENT" = "schedule" ]; then
-            FOLDER="queue/$(TZ=Asia/Seoul date +%F)"
+            DATE="$(TZ=Asia/Seoul date +%F)"
             DRY=false
           else
-            FOLDER="$INPUT_FOLDER"
+            DATE="$INPUT_DATE"
             DRY="$INPUT_DRY"
           fi
+          FOLDER="queue/$DATE"
+          echo "대상 날짜: $DATE"
 
-          if [ ! -d "$FOLDER" ]; then
-            echo "게시할 폴더($FOLDER)가 없어요."
-            if [ "$EVENT" = "schedule" ]; then
-              echo "오늘 승인된 카드뉴스가 없어서 게시하지 않아요."
-              exit 0
-            fi
-            exit 1
-          fi
-
-          if [ "$DRY" = "true" ]; then
-            python3 post_instagram.py "$FOLDER" --dry-run
+          if [ -f "posted/$DATE.txt" ]; then
+            echo "$DATE 는 이미 게시했어요. 중복 게시를 막기 위해 멈춰요."
             exit 0
           fi
 
-          python3 post_instagram.py "$FOLDER"
+          # 사진 창고에서 이 날짜 폴더가 들어 있는 줄기를 찾아요
+          git clone -q --no-single-branch "https://github.com/$QUEUE_REPO.git" qrepo
+          cd qrepo
+          FOUND=""
+          for B in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin | grep '^origin/' | grep -v '/HEAD$'); do
+            if [ -n "$(git ls-tree -r --name-only "$B" -- "$FOLDER" | head -1)" ]; then
+              FOUND="$B"
+              break
+            fi
+          done
+
+          if [ -z "$FOUND" ]; then
+            echo "$FOLDER 가 없어요. 오늘 승인된 카드뉴스가 없어서 게시하지 않아요."
+            exit 0
+          fi
+
+          SHA="$(git rev-parse "$FOUND")"
+          echo "사용할 줄기: $FOUND ($SHA)"
+          git checkout -q "$SHA"
+          export IMAGE_BASE_URL="https://raw.githubusercontent.com/$QUEUE_REPO/$SHA"
+
+          if [ "$DRY" = "true" ]; then
+            python3 ../post_instagram.py "$FOLDER" --dry-run
+            exit 0
+          fi
+
+          python3 ../post_instagram.py "$FOLDER"
+          cd ..
 
           mkdir -p posted
-          git mv "$FOLDER" "posted/$(basename "$FOLDER")"
+          echo "posted $(date -u +%FT%TZ) $SHA" > "posted/$DATE.txt"
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git commit -m "posted $FOLDER"
+          git add "posted/$DATE.txt"
+          git commit -m "posted $DATE"
           git push

@@ -1,0 +1,29 @@
+name: Instagram 카드뉴스 게시
+
+on:
+  workflow_dispatch:
+    inputs:
+      folder:
+        description: "게시할 폴더 (예: queue/2026-10-29)"
+        required: true
+      dry_run:
+        description: "true면 게시하지 않고 확인만"
+        required: false
+        default: "true"
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 게시
+        env:
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IMAGE_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/main
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python3 post_instagram.py "${{ github.event.inputs.folder }}" --dry-run
+          else
+            python3 post_instagram.py "${{ github.event.inputs.folder }}"
+          fi

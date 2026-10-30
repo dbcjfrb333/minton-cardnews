@@ -1,15 +1,20 @@
 name: Instagram 카드뉴스 게시
 
 on:
+  schedule:
+    - cron: "50 8 * * *" # 매일 한국시간 17:50 (UTC 08:50)
   workflow_dispatch:
     inputs:
       folder:
-        description: "게시할 폴더 (예: queue/2026-10-29)"
+        description: "게시할 폴더 (예: queue/test-1030)"
         required: true
       dry_run:
         description: "true면 게시하지 않고 확인만"
         required: false
         default: "true"
+
+permissions:
+  contents: write
 
 jobs:
   post:
@@ -21,9 +26,37 @@ jobs:
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           IMAGE_BASE_URL: https://raw.githubusercontent.com/${{ github.repository }}/main
+          EVENT: ${{ github.event_name }}
+          INPUT_FOLDER: ${{ github.event.inputs.folder }}
+          INPUT_DRY: ${{ github.event.inputs.dry_run }}
         run: |
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            python3 post_instagram.py "${{ github.event.inputs.folder }}" --dry-run
+          if [ "$EVENT" = "schedule" ]; then
+            FOLDER="queue/$(TZ=Asia/Seoul date +%F)"
+            DRY=false
           else
-            python3 post_instagram.py "${{ github.event.inputs.folder }}"
+            FOLDER="$INPUT_FOLDER"
+            DRY="$INPUT_DRY"
           fi
+
+          if [ ! -d "$FOLDER" ]; then
+            echo "게시할 폴더($FOLDER)가 없어요."
+            if [ "$EVENT" = "schedule" ]; then
+              echo "오늘 승인된 카드뉴스가 없어서 게시하지 않아요."
+              exit 0
+            fi
+            exit 1
+          fi
+
+          if [ "$DRY" = "true" ]; then
+            python3 post_instagram.py "$FOLDER" --dry-run
+            exit 0
+          fi
+
+          python3 post_instagram.py "$FOLDER"
+
+          mkdir -p posted
+          git mv "$FOLDER" "posted/$(basename "$FOLDER")"
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git commit -m "posted $FOLDER"
+          git push
